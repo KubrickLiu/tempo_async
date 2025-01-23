@@ -16,7 +16,8 @@ func TestSuccess(t *testing.T) {
 		return expectRet, nil
 	})
 
-	future := task.Call()
+	future := task.Future()
+	go task.Call()
 	ret, _ := future.Join()
 	assert.Equal(t, ret, expectRet)
 }
@@ -29,7 +30,8 @@ func TestFailure(t *testing.T) {
 		return "", expectError
 	})
 
-	future := task.Call()
+	future := task.Future()
+	go task.Call()
 	_, err := future.Join()
 	assert.EqualError(t, err, expectError.Error())
 }
@@ -45,7 +47,11 @@ func TestContextCancel(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}()
-	_, err := task.Call().Get(ctx)
+
+	future := task.Future()
+	go task.Call()
+
+	_, err := future.Get(ctx)
 
 	assert.EqualError(t, err, "context canceled")
 }
