@@ -19,8 +19,8 @@ func TestWorkerRun(t *testing.T) {
 	worker.append(task)
 
 	ret, err := future.Join()
-	worker.finish()
+	worker.close()
 
-	assert.Equal(t, ret, "mock")
+	assert.Equal(t, "mock", ret)
 	assert.Empty(t, err)
 }

@@ -14,29 +14,28 @@ const (
 type Worker interface {
 	isOpen() bool
 	run()
-	append(task ITask)
+	append(ITask)
 	finish()
 	close()
+	registerQueue(WorkerQueue)
 }
 
 type workerImpl struct {
 	tasksChannel chan ITask
 	closeOnce    sync.Once
 	open         atomic.Bool
-	pool         Pool
+	workQueue    WorkerQueue
 }
 
-func NewWorker(len int, pool Pool) Worker {
+func NewWorker(bufferSize int) Worker {
 	worker := &workerImpl{
-		tasksChannel: make(chan ITask, len),
-		pool:         pool,
+		tasksChannel: make(chan ITask, bufferSize),
 	}
 	return worker
 }
 
 func (worker *workerImpl) isOpen() bool {
-	flag := worker.open.Load()
-	return flag
+	return worker.open.Load()
 }
 
 func (worker *workerImpl) run() {
@@ -60,6 +59,12 @@ func (worker *workerImpl) run() {
 					break
 				}
 
+				// channel accept finish signal
+				if val == nil {
+					worker.open.Store(false)
+					break
+				}
+
 				switch val.(type) {
 				case ITask:
 					val.Call()
@@ -77,8 +82,8 @@ func (worker *workerImpl) run() {
 		}
 
 		// channel is empty and pool is not nil, release current worker from pool
-		if worker.pool != nil {
-			worker.pool.Release(worker)
+		if worker.workQueue != nil {
+			worker.workQueue.release(worker)
 		}
 	}
 
@@ -88,6 +93,7 @@ func (worker *workerImpl) run() {
 func (worker *workerImpl) append(task ITask) {
 	if task != nil && worker.isOpen() {
 		worker.tasksChannel <- task
+		worker.run()
 	}
 }
 
@@ -97,9 +103,11 @@ func (worker *workerImpl) finish() {
 
 func (worker *workerImpl) close() {
 	worker.closeOnce.Do(func() {
-		worker.open.Store(false)
-
 		close(worker.tasksChannel)
 		worker.tasksChannel = nil
 	})
+}
+
+func (worker *workerImpl) registerQueue(queue WorkerQueue) {
+	worker.workQueue = queue
 }

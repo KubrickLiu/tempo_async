@@ -3,28 +3,34 @@ package executor
 import (
 	"github.com/KubrickLiu/tempo_async/lock"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type WorkerQueue interface {
 	len() int
 	isEmpty() bool
-	newWorker(threshold int, newFunction func() Worker) bool
-	detach() Worker
-	waitDetach()
+	acceptWorker(threshold int, newFunction func() Worker) bool
+	acquire() Worker
+	waitAcquire()
 	release(Worker)
-	clean()
+	runningNums() int
+	waitingNums() int
 }
 
 type loopQueue struct {
-	WorkerQueue
+	locker     sync.Locker
+	cond       *sync.Cond
+	condTicker *time.Ticker
 
-	locker sync.Locker
-	cond   *sync.Cond
-	idle   []Worker
-	using  map[Worker]bool
+	idle  []Worker
+	using map[Worker]bool
+
+	waitNums atomic.Int32
+	runNums  atomic.Int32
 }
 
-func NewQueue() WorkerQueue {
+func newQueue() WorkerQueue {
 	queue := &loopQueue{
 		locker: lock.NewSpinLock(),
 		idle:   make([]Worker, 0),
@@ -32,7 +38,20 @@ func NewQueue() WorkerQueue {
 	}
 
 	queue.cond = sync.NewCond(queue.locker)
+	queue.condTicker = time.NewTicker(20 * time.Millisecond)
+	queue.periodBroadcast()
 	return queue
+}
+
+func (queue *loopQueue) periodBroadcast() {
+	go func() {
+		select {
+		case <-queue.condTicker.C:
+			if queue.waitingNums() > 0 && len(queue.idle) > 0 {
+				queue.broadcast()
+			}
+		}
+	}()
 }
 
 func (queue *loopQueue) len() int {
@@ -47,12 +66,12 @@ func (queue *loopQueue) isEmpty() bool {
 	return queue.len() == 0
 }
 
-func (queue *loopQueue) newWorker(threshold int, newFunction func() Worker) bool {
+func (queue *loopQueue) acceptWorker(threshold int, newFunction func() Worker) bool {
 	flag := false
 
 	lock.Wrap(queue.locker, func() {
 		idleLen := len(queue.idle)
-		if idleLen >= threshold {
+		if idleLen > threshold {
 			return
 		}
 
@@ -62,14 +81,15 @@ func (queue *loopQueue) newWorker(threshold int, newFunction func() Worker) bool
 		}
 
 		queue.idle = append(queue.idle, worker)
+		worker.registerQueue(queue)
 		flag = true
 	})
 
-	queue.cond.Broadcast()
+	queue.broadcast()
 	return flag
 }
 
-func (queue *loopQueue) detach() Worker {
+func (queue *loopQueue) acquire() Worker {
 	var worker Worker = nil
 
 	lock.Wrap(queue.locker, func() {
@@ -81,8 +101,12 @@ func (queue *loopQueue) detach() Worker {
 		worker = queue.idle[idleLen-1]
 		queue.idle = queue.idle[:idleLen-1]
 		queue.using[worker] = true
+		queue.runNums.Add(1)
 	})
 
+	if worker != nil {
+		worker.run()
+	}
 	return worker
 }
 
@@ -98,36 +122,28 @@ func (queue *loopQueue) release(worker Worker) {
 
 		delete(queue.using, worker)
 		queue.idle = append(queue.idle, worker)
+		queue.runNums.Add(-1)
 	})
 
+	queue.broadcast()
+}
+
+func (queue *loopQueue) broadcast() {
 	queue.cond.Broadcast()
 }
 
-func (queue *loopQueue) clean() {
-	cleanUsing := func() {
-		for worker, _ := range queue.using {
-			worker.close()
-		}
-
-		queue.using = make(map[Worker]bool)
+func (queue *loopQueue) waitAcquire() {
+	if len(queue.idle) == 0 {
+		queue.waitNums.Add(1)
+		queue.cond.Wait()
+		queue.waitNums.Add(-1)
 	}
-
-	cleanIdle := func() {
-		for _, worker := range queue.idle {
-			worker.close()
-		}
-
-		queue.idle = make([]Worker, 0)
-	}
-
-	lock.Wrap(queue.locker, func() {
-		cleanUsing()
-		cleanIdle()
-	})
-
-	queue.cond.Broadcast()
 }
 
-func (queue *loopQueue) waitDetach() {
-	queue.cond.Wait()
+func (queue *loopQueue) runningNums() int {
+	return int(queue.runNums.Load())
+}
+
+func (queue *loopQueue) waitingNums() int {
+	return int(queue.waitNums.Load())
 }

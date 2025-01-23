@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestSuccess(t *testing.T) {
+func TestTaskSuccess(t *testing.T) {
 	expectRet := "hello"
 
 	task := NewTask[string](func() (string, error) {
@@ -19,10 +19,10 @@ func TestSuccess(t *testing.T) {
 	future := task.Future()
 	go task.Call()
 	ret, _ := future.Join()
-	assert.Equal(t, ret, expectRet)
+	assert.Equal(t, expectRet, ret)
 }
 
-func TestFailure(t *testing.T) {
+func TestTaskFailure(t *testing.T) {
 	expectError := errors.New("mock error")
 
 	task := NewTask[string](func() (string, error) {
@@ -36,7 +36,7 @@ func TestFailure(t *testing.T) {
 	assert.EqualError(t, err, expectError.Error())
 }
 
-func TestContextCancel(t *testing.T) {
+func TestTaskContextCancel(t *testing.T) {
 	task := NewTask[string](func() (string, error) {
 		time.Sleep(1 * time.Second)
 		return "", nil

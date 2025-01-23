@@ -3,7 +3,8 @@ package executor
 import "errors"
 
 var (
-	defaultPool = NewPool(10)
+	defaultCapacity = 10
+	defaultPool     = NewPool(defaultCapacity)
 )
 
 func Submit[T any](function func() (T, error)) Future[T] {

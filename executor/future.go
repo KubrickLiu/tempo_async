@@ -3,7 +3,6 @@ package executor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 )
 
@@ -25,7 +24,6 @@ type futureImpl[T any] struct {
 	done  chan any
 
 	completeOnce sync.Once
-	acceptOnce   sync.Once
 }
 
 // Verify futureImpl satisfies the Future interface
@@ -50,30 +48,33 @@ func (impl *futureImpl[T]) Get(ctx context.Context) (T, error) {
 }
 
 func (impl *futureImpl[T]) acceptWithContext(ctx context.Context) {
-	impl.acceptOnce.Do(func() {
-		if ctx == nil {
-			select {
-			case result := <-impl.done:
-				impl.setResult(result)
-				return
-			}
-		} else {
-			select {
-			case result := <-impl.done:
-				impl.setResult(result)
-				return
-			case <-ctx.Done():
-				fmt.Println("```````")
-				impl.setResult(errors.New("context canceled"))
-				return
-			}
+	if impl.done == nil {
+		return
+	}
+
+	if ctx == nil {
+		select {
+		case result := <-impl.done:
+			impl.setResult(result)
+			return
 		}
-	})
+	} else {
+		select {
+		case result := <-impl.done:
+			impl.setResult(result)
+			return
+		case <-ctx.Done():
+			impl.setResult(errors.New("context canceled"))
+			return
+		}
+	}
 }
 
 func (impl *futureImpl[T]) complete(result any) {
 	impl.completeOnce.Do(func() {
 		impl.done <- result
+		close(impl.done)
+		impl.done = nil
 	})
 }
 
